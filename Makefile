@@ -1,5 +1,5 @@
 LDFLAGS= -lsodium
-CFLAGS=-Wall -g  
+CFLAGS=-Wall -Wextra 
 CC=gcc
 
 crypt.out: main.o

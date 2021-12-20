@@ -13,8 +13,14 @@
 #define CHUNK_SIZE 4096
 
 
+void shred_file(const char *filename)
+{
+
+}
+
+
 // encrypt file
-int encrypt(const char *filename, const char *password)
+int encrypt_file(const char *filename, const char *password, const char *filename_out)
 {
     unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
     unsigned char salt[crypto_pwhash_SALTBYTES];
@@ -39,26 +45,20 @@ int encrypt(const char *filename, const char *password)
     unsigned char buffero[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
     unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
     crypto_secretstream_xchacha20poly1305_state st;
-    FILE *temp, *file;
+    FILE *out, *file;
     unsigned long long outputLen;
     size_t readLen;
     int eof;
     unsigned char tag;
 
     file = fopen(filename, "rb");
-    
-    char *temp_fname;
-    temp_fname = (char *) malloc(sizeof filename +4);
-    strcpy(temp_fname, filename);
-    strcat(temp_fname, ".tmp");
-
-    temp = fopen(temp_fname, "wb");
+    out = fopen(filename_out, "wb");
    
 
-    fwrite(salt, 1, sizeof salt, temp);
+    fwrite(salt, 1, sizeof salt, out);
 
     crypto_secretstream_xchacha20poly1305_init_push(&st, header, key);
-    fwrite(header, 1, sizeof header, temp);
+    fwrite(header, 1, sizeof header, out);
 
     printf("header: %s\n", header);
     
@@ -67,18 +67,16 @@ int encrypt(const char *filename, const char *password)
         eof = feof(file);
         tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
         crypto_secretstream_xchacha20poly1305_push(&st, buffero, &outputLen, bufferi, readLen, NULL, 0, tag);
-        fwrite(buffero, 1, (size_t) outputLen, temp);
+        fwrite(buffero, 1, (size_t) outputLen, out);
     } while (!eof);
 
-    fclose(temp);
+    fclose(out);
     fclose(file);
 
-    
     file = fopen(filename, "wb");
-    temp = fopen(temp_fname, "rb");
     
-    // shred old file (TODO maybe see if this is completely a secure method)
-    // right now, this method overwrites with zeros
+    // shred old file (maybe see if this is completely a secure method)
+    // TODO check GNU shred
     printf("shred file\n");
     static const char zeros[4096];
     off_t size = lseek(file, 0, SEEK_END);
@@ -87,32 +85,94 @@ int encrypt(const char *filename, const char *password)
         size -= write(file, zeros, sizeof zeros);
     while (size)
         size -= write(file, zeros, size);
-
-    // write temp to old file
-    char c;
-
-    c = fgetc(temp);
-    while (c != EOF)
-    {
-        fputc(c, file);
-        c = fgetc(temp);
-    }
-    // remove temporary file
-    remove(temp_fname);
-
     
+    // remove temporary file
+    fclose(file);
+    unlink(filename); 
 
     sodium_memzero(key, sizeof(key));
-
     return 0;
+}
 
-        
+
+// decrypt to file, for editing with external program
+int decrypt_file(const char *filename_in, const char *password, const char *filename_out)
+{
+    unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+    unsigned char salt[crypto_pwhash_SALTBYTES];
+    
+    // open encrypted file
+    FILE *p_file;
+    p_file = fopen(filename_in, "rb");
+    char c = 0; 
+
+    // we need to cut the salt from first n bytes of encrypted file
+    // iterate through file to get salt
+    for (int i = 0; i <= crypto_pwhash_SALTBYTES && c != EOF; ++i) {
+        c = fgetc(p_file);
+        strncat(salt, &c, 1);
+    }
+
+
+    // cryptographic key generation from extracted salt and password
+    if (crypto_pwhash(key, sizeof key, password, strlen(password), salt, crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_MEMLIMIT_INTERACTIVE, crypto_pwhash_ALG_DEFAULT) != 0) {
+        printf("key creation error\n");
+        return 1;
+    } else {
+        printf("key generated from password\n");
+    }
+
+    // TODO check if file 
+
+    unsigned char bufferi[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+    unsigned char buffero[CHUNK_SIZE];
+    unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+    crypto_secretstream_xchacha20poly1305_state st;
+    unsigned long long outputLen;
+    size_t readLen;
+    int eof;
+    unsigned char tag;
+    
+    fseek(p_file, crypto_pwhash_SALTBYTES, SEEK_SET);
+
+    fread(header, 1, sizeof header, p_file);
+
+    if (crypto_secretstream_xchacha20poly1305_init_pull(&st, header, key) != 0) {
+        printf("incomplete header\n");
+        return 1;
+    }
+
+    FILE *p_file_out;
+    p_file_out = fopen(filename_out, "wb");
+
+
+    do {
+        readLen = fread(bufferi, 1, sizeof bufferi, p_file);
+        eof = feof(p_file);
+        if (crypto_secretstream_xchacha20poly1305_pull(&st, buffero, &outputLen, &tag, bufferi, readLen, NULL, 0) != 0) {
+            printf("corrupted chunk encountered, incorrect password?\n");
+            return 1;
+        }
+        if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL && !eof) {
+            printf("end of file to decrypt reached before the end of the stream\n");
+            return 1;
+        }
+        // printf("%s\n", buffero);
+        fwrite(buffero, 1, (size_t) outputLen, p_file_out);
+    } while (!eof);
+    
+    
+    fclose(p_file);
+    fclose(p_file_out);
+    
+    return 0;
+ 
 }
 
 
 
 // decrypt file to memory 
-unsigned char * decrypt(const char *filename, const char *password)
+unsigned char * decrypt_mem(const char *filename, const char *password)
 {
     unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
     unsigned char salt[crypto_pwhash_SALTBYTES];
@@ -155,7 +215,7 @@ unsigned char * decrypt(const char *filename, const char *password)
 
     if (crypto_secretstream_xchacha20poly1305_init_pull(&st, header, key) != 0) {
         printf("incomplete header\n");
-        exit(1);
+        return NULL;
     }
 
     // we have to progressively add to ret variable from buf... 
@@ -172,11 +232,11 @@ unsigned char * decrypt(const char *filename, const char *password)
         eof = feof(file);
         if (crypto_secretstream_xchacha20poly1305_pull(&st, buffero, &outputLen, &tag, bufferi, readLen, NULL, 0) != 0) {
             printf("corrupted chunk encountered, incorrect password?\n");
-            exit(1);
+            return NULL; 
         }
         if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL && !eof) {
             printf("end of file to decrypt reached before the end of the stream\n");
-            exit(1);
+            return NULL;
         }
         // TODO STRCAT!!! NOT SAFE!!!!
         strcat(ret, buffero);
@@ -186,7 +246,7 @@ unsigned char * decrypt(const char *filename, const char *password)
     fclose(file);
     sodium_memzero(key, sizeof(key));
     
-    // TODO we cannot just return the buffer. what if more than CHUNK_SIZE bytes? see above
+    // we return the constructed string
     return ret;
 }
 
@@ -221,16 +281,16 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "e") == 0) {
 
         printf("encrypting file 'testencrypt'\n");
-        encrypt("testencrypt", argv[2]);
+        encrypt_file("testencrypt", argv[2], "testencrypt.o");
 
     } else if (strcmp(argv[1], "d") == 0) {
 
         printf("decrypt the file 'testencrypt'\n");
         
-        unsigned char *decrypted;
-        decrypted = decrypt("testencrypt", argv[2]);
+        int decrypted;
+        decrypted = decrypt_file("testencrypt.o", argv[2], "testencrypt");
         
-        printf("%s\n", decrypted);
+        printf("%d\n", decrypted);
 
     } else {
         printf("failure arguments\n");
