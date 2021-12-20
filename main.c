@@ -15,7 +15,8 @@
 #define CHUNK_SIZE 4096
 
 
-// adapted from BusyBox coreutils 
+// adapted from BusyBox coreutils
+// 3 random passes, one zero pass. 
 int shred(const char *fname)
 {
 	int rand_fd = rand_fd; /* for compiler */
@@ -45,9 +46,15 @@ int shred(const char *fname)
             lseek(fd, 0, SEEK_SET);
         }
 
+        sendfile(fd, zero_fd, 0, size);
+        fdatasync(fd);
+        lseek(fd, 0, SEEK_SET);
+
     }
     truncate(fd, 0);
     unlink(fname);
+    close(rand_fd);
+    close(zero_fd);
     close(fd);
 
 	return 0;
