@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #endif
 
 #include <sodium.h>
@@ -13,11 +15,43 @@
 #define CHUNK_SIZE 4096
 
 
-void shred_file(const char *filename)
+// adapted from BusyBox coreutils 
+int shred(const char *fname)
 {
+	int rand_fd = rand_fd; /* for compiler */
+	int zero_fd;
+	unsigned num_iter = 3;
 
+	zero_fd = open("/dev/zero", O_RDONLY);
+	rand_fd = open("/dev/urandom", O_RDONLY);
+
+    struct stat sb;
+    unsigned i;
+    int fd;
+
+    if (!fname)
+        return 1;
+    fd = -1;
+    fd = open(fname, O_WRONLY);
+    if (fd == NULL)
+        return 1;
+
+    if (fstat(fd, &sb) == 0 && sb.st_size > 0) {
+        off_t size = sb.st_size;
+
+        for (i = 0; i < num_iter; i++) {
+            sendfile(fd, rand_fd, 0, size);
+            fdatasync(fd);
+            lseek(fd, 0, SEEK_SET);
+        }
+
+    }
+    truncate(fd, 0);
+    unlink(fname);
+    close(fd);
+
+	return 0;
 }
-
 
 // encrypt file
 int encrypt_file(const char *filename, const char *password, const char *filename_out)
@@ -62,34 +96,24 @@ int encrypt_file(const char *filename, const char *password, const char *filenam
 
     printf("header: %s\n", header);
     
+    int i = 0;
     do {
+        printf("%d\n", i);
         readLen = fread(bufferi, 1, sizeof bufferi, file);
         eof = feof(file);
         tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
         crypto_secretstream_xchacha20poly1305_push(&st, buffero, &outputLen, bufferi, readLen, NULL, 0, tag);
         fwrite(buffero, 1, (size_t) outputLen, out);
+        printf("%s\n", buffero);
+        ++i;
     } while (!eof);
+
 
     fclose(out);
     fclose(file);
-
-    file = fopen(filename, "wb");
+ 
+    shred(filename);
     
-    // shred old file (maybe see if this is completely a secure method)
-    // TODO check GNU shred
-    printf("shred file\n");
-    static const char zeros[4096];
-    off_t size = lseek(file, 0, SEEK_END);
-    lseek(file, 0, SEEK_SET);
-    while (size>sizeof zeros)
-        size -= write(file, zeros, sizeof zeros);
-    while (size)
-        size -= write(file, zeros, size);
-    
-    // remove temporary file
-    fclose(file);
-    unlink(filename); 
-
     sodium_memzero(key, sizeof(key));
     return 0;
 }
@@ -271,26 +295,35 @@ int main(int argc, char **argv)
         (void) close(fd);
     }
     #endif
-    
+
+    printf("%d\n", argc);
+
+    if (argc != 3){
+        printf("not enough arguments\n");
+        return 1;
+    }
 
     if (sodium_init() < 0) {
         printf("panic!\n");
     }
     printf("initialized libraries\n---\n");
+
+    char *opt = argv[1];
     
-    if (strcmp(argv[1], "e") == 0) {
+
+    if (!strcmp(opt, "e")) {
 
         printf("encrypting file 'testencrypt'\n");
         encrypt_file("testencrypt", argv[2], "testencrypt.o");
 
-    } else if (strcmp(argv[1], "d") == 0) {
+    } else if (!strcmp(opt, "d")) {
 
         printf("decrypt the file 'testencrypt'\n");
         
-        int decrypted;
-        decrypted = decrypt_file("testencrypt.o", argv[2], "testencrypt");
+        char *decrypted;
+        decrypted = decrypt_mem("testencrypt.o", argv[2]);
         
-        printf("%d\n", decrypted);
+        printf("%s\n", decrypted);
 
     } else {
         printf("failure arguments\n");
