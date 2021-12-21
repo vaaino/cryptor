@@ -1,15 +1,14 @@
 LDFLAGS= -lsodium -g
 CFLAGS=-Wall -Wextra -g
 CC=gcc
+OBJFILES = enc.o main.o
+TARGET = crypt.out
 
-crypt.out: main.o
-	$(CC) -o crypt.out main.o $(LDFLAGS) $(CFLAGS)
-
-main.o: main.c
-	$(CC) -c main.c $(CFLAGS)
+$(TARGET): $(OBJFILES)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJFILES) $(LDFLAGS)
 
 run: main
-	./crypt.out
+	./$(TARGET)
 
 clean:
-	rm -rf *.o crypt.out
+	rm -rf $(OBJFILES) $(TARGET)
