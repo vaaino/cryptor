@@ -1,3 +1,5 @@
+#!/bin/bash
+read -r -d '' license <<-"EOF"
 /*    Copyright (c) 2021-2022, Vaino Kauppila
  *    All rights reserved
  *
@@ -7,16 +9,13 @@
  *    a copy of the license with this file. If not, please or visit:
  *    ###############.com.
  */
+EOF
 
-#define CHUNK_SIZE 4096
-#define SHRED_RNG_PASSES 4
+files=$(grep -rL "Copyright (c) 2021-2022, Vaino Kauppila" * | grep "\.h\|\.c")
 
-int shred(const char *fname);
-
-int encrypt_file(const char *filename, const char *password, const char *filename_out);
-
-int decrypt_file(const char *filename_in, const char *password, const char *filename_out);
-
-unsigned char * decrypt_mem(const char *filename, const char *password);
-
-int sodium_init();
+for f in $files
+do
+  echo -e "$license" > temp  
+  cat $f >> temp
+  mv temp $f
+done
